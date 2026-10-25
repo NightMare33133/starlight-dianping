@@ -2,16 +2,17 @@ server:
   port: 8081
 spring:
   application:
-    name: hmdp
+    name: starlight-dp    # 1. 服务名也换上专属名字
   datasource:
     driver-class-name: com.mysql.jdbc.Driver
-    url: jdbc:mysql://127.0.0.1:3306/hmdp?useSSL=false&serverTimezone=UTC
+    url: jdbc:mysql://127.0.0.1:3306/starlight_dp?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    # 3. 库名改成 starlight_dp，时区改成 Asia/Shanghai 避免订单/时间差8小时，加上允许公钥检索
     username: root
-    password: 123
+    password: 123456  # 4. 改成你在 DataGrip 连本地 MySQL 用的真实密码（原来的 123 肯定不对）
   redis:
-    host: 192.168.150.101
+    host: 127.0.0.1       # 5. 改成 127.0.0.1（原先 192.168.150.101 是黑马老师的虚拟机IP）
     port: 6379
-    password: 123321
+    password: 123456      # 6. 改成你 Docker 启动 Redis 时设的密码 123456（原先 123321 是课件密码）
     lettuce:
       pool:
         max-active: 10
