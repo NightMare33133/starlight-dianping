@@ -33,7 +33,9 @@ public class ShopController {
      */
     @GetMapping("/{id}")
     public Result queryShopById(@PathVariable("id") Long id) {
-        return Result.ok(shopService.getById(id));
+
+        // 新增redis缓存后，查询商铺信息的逻辑需要进行调整，具体的实现方式是在service层实现的，所以这里直接调用service层的方法即可。
+        return shopService.queryById(id);
     }
 
     /**
