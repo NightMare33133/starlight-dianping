@@ -10,6 +10,7 @@ import com.hmdp.entity.Shop;
 import com.hmdp.mapper.ShopMapper;
 import com.hmdp.service.IShopService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.hmdp.utils.CacheClient;
 import com.hmdp.utils.RedisData;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
@@ -19,6 +20,7 @@ import javax.annotation.Resource;
 import java.beans.Transient;
 import java.time.LocalDateTime;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
 
 import static com.hmdp.utils.RedisConstants.*;
 /**
@@ -35,17 +37,29 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     @Resource
     private StringRedisTemplate stringRedisTemplate;
 
+    @Resource
+    private CacheClient  cacheClient;
+
     @Override
     public Result queryById(Long id) {
 
         // 缓存穿透
         //Shop shop = queryWithPassThrough(id);
+//        Shop shop = cacheClient.queryWithPassThrough(CACHE_SHOP_KEY, id, Shop.class,
+//                this::getById, CACHE_SHOP_TTL, TimeUnit.MINUTES);
+
+        // this::getById 是一个方法引用，它表示将当前对象的 getById 方法作为参数传递给 queryWithPassThrough 方法。
+        // getById 是 ServiceImpl 类提供的一个方法，用于根据主键查询数据库中的记录。
+        // 在这里，它被用作一个回调函数，当缓存中没有命中时，
+        // queryWithPassThrough 方法会调用 getById 方法从数据库中获取数据。
 
         // 互斥锁解决缓存击穿
-//        Shop shop = queryWithMutex(id);
+//      //Shop shop = queryWithMutex(id);
 
         // 逻辑过期解决缓存击穿
-        Shop shop = queryWithLogicalExpire(id);
+        //Shop shop = queryWithLogicalExpire(id);
+        Shop shop = cacheClient.queryWithLogicalExpire(CACHE_SHOP_KEY, id, Shop.class,
+                this::getById, 20L, TimeUnit.SECONDS);
 
         if  (shop == null) {
             return Result.fail("店铺不存在！");
