@@ -59,8 +59,12 @@ public class ShopController {
     @PutMapping
     public Result updateShop(@RequestBody Shop shop) {
         // 写入数据库
-        shopService.updateById(shop);
-        return Result.ok();
+//        shopService.updateById(shop);
+        // 新增redis缓存后，更新商铺信息的逻辑需要进行调整，具体的实现方式是在service层实现的，
+        // 所以这里直接调用service层的方法即可。
+
+
+        return shopService.update(shop);
     }
 
     /**
