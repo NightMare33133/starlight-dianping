@@ -27,8 +27,10 @@ public class ShopTypeController {
 
     @GetMapping("list")
     public Result queryTypeList() {
-        List<ShopType> typeList = typeService
-                .query().orderByAsc("sort").list();
-        return typeService.queryTypeList(typeList);
+        // 这里注释掉的是原本的代码，直接在controller层查询数据库并返回结果，
+        // 现在我们将查询逻辑放到service层，controller层只负责调用service层的方法。
+//        List<ShopType> typeList = typeService
+//                .query().orderByAsc("sort").list();
+        return typeService.queryTypeList();
     }
 }

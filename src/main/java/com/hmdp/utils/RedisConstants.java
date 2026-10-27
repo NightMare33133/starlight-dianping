@@ -11,6 +11,13 @@ public class RedisConstants {
     public static final Long CACHE_SHOP_TTL = 30L;
     public static final String CACHE_SHOP_KEY = "cache:shop:";
 
+    // 店铺类型缓存 key
+    public static final String CACHE_SHOP_TYPE_KEY = "cache:shop:type";
+    // 店铺类型缓存有效期（分类基本几个月不变一次，可以给长一点，比如 30 分钟或更久）
+    public static final Long CACHE_SHOP_TYPE_TTL = 30L;
+
+
+
     public static final String LOCK_SHOP_KEY = "lock:shop:";
     public static final Long LOCK_SHOP_TTL = 10L;
 
