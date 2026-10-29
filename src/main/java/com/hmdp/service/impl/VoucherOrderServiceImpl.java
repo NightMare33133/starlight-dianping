@@ -57,8 +57,13 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         //这个代码语句的意思是使用 MyBatis-Plus 的更新方法来执行一个 SQL 更新操作。
         // 具体来说，它会将指定 ID 的秒杀优惠券的库存（stock）字段减 1。
         boolean success = seckillVoucherService.update()
-                .setSql("stock = stock - 1")
-                .eq("voucher_id", voucherId).update();
+                .setSql("stock = stock - 1")// set stock = stock - 1
+                .eq("voucher_id", voucherId)
+//                .eq("stock", voucher.getStock()) // 乐观锁，确保库存未被其他线程修改
+                .gt("stock", 0) // 确保库存大于 0
+                // where id = ? and stock = ? 这部分是为了确保在更新库存时，只有当库存值与当前查询到的库存值相等时才会执行更新操作，从而防止并发问题。
+                .update();
+
         if(!success) {
             return Result.fail("扣减库存失败！");
         }
