@@ -8,8 +8,10 @@ import com.hmdp.service.ISeckillVoucherService;
 import com.hmdp.service.IVoucherOrderService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.utils.RedisIdWorker;
+import com.hmdp.utils.SimpleRedisLock;
 import com.hmdp.utils.UserHolder;
 import org.springframework.aop.framework.AopContext;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.lang.NonNull;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -34,6 +36,9 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     @Resource
     private RedisIdWorker redisIdWorker;
 
+    @Resource
+    private StringRedisTemplate stringRedisTemplate;
+
 
     @Override
     public Result seckillVoucher(Long voucherId) {
@@ -56,14 +61,34 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 
         // 这里是先获取锁再进入函数，不会与事务冲突，事务在函数内部执行，锁在函数外部获取，事务提交后锁才释放，所以不会出现事务失效的问题。
         Long userId = UserHolder.getUser().getId();
-        synchronized (userId.toString().intern()) {
-            //这里用this会有问题
-            // 因为事务是通过代理对象来实现的，而在同一个类中直接调用方法不会经过代理对象，所以事务不会生效。
-            // 解决方法是通过AopContext.currentProxy()获取当前对象的代理对象
-            // 获取代理对象（事务）
+
+//        synchronized (userId.toString().intern()) {
+//            //这里用this会有问题
+//            // 因为事务是通过代理对象来实现的，而在同一个类中直接调用方法不会经过代理对象，所以事务不会生效。
+//            // 解决方法是通过AopContext.currentProxy()获取当前对象的代理对象
+//            // 获取代理对象（事务）
+//            IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
+//            return proxy.createVoucherOrder(voucherId);
+//        }
+
+        // 现在要自己创建锁对象
+        SimpleRedisLock lock = new SimpleRedisLock("order:" + userId, stringRedisTemplate);
+
+        // 获取锁
+        boolean isLock = lock.tryLock(1200L);
+        // 判断是否获取锁成功
+        if (!isLock) {
+            // 获取锁失败，返回错误或重试
+            return Result.fail("不允许重复下单！");
+        }
+
+        try{
             IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
             return proxy.createVoucherOrder(voucherId);
+        }finally {
+            lock.unlock();
         }
+
     }
 
     @Transactional
