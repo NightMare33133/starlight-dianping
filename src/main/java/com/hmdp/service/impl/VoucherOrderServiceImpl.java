@@ -10,6 +10,8 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.utils.RedisIdWorker;
 import com.hmdp.utils.SimpleRedisLock;
 import com.hmdp.utils.UserHolder;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.springframework.aop.framework.AopContext;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.lang.NonNull;
@@ -38,6 +40,9 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 
     @Resource
     private StringRedisTemplate stringRedisTemplate;
+
+    @Resource
+    private RedissonClient redissonClient;
 
 
     @Override
@@ -72,10 +77,17 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 //        }
 
         // 现在要自己创建锁对象
-        SimpleRedisLock lock = new SimpleRedisLock("order:" + userId, stringRedisTemplate);
+        //SimpleRedisLock lock = new SimpleRedisLock("order:" + userId, stringRedisTemplate);
+
+        //改用Redisson
+        RLock lock = redissonClient.getLock("lock:order:" + userId);
 
         // 获取锁
-        boolean isLock = lock.tryLock(1200L);
+        // 这里选择无参的tryLock()方法，它会立即返回一个布尔值，表示是否成功获取锁。
+        // 如果获取锁失败，说明当前用户已经在处理订单，直接返回错误信息
+        // 这里不使用lock.lock()，因为lock.lock()会阻塞当前线程
+        boolean isLock = lock.tryLock();
+
         // 判断是否获取锁成功
         if (!isLock) {
             // 获取锁失败，返回错误或重试
