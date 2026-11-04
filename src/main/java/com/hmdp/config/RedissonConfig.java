@@ -22,4 +22,17 @@ public class RedissonConfig {
         // 3. 创建并返回 RedissonClient 客户端
         return Redisson.create(config);
     }
+
+    @Bean
+    public RedissonClient redissonClient2() {
+        Config config = new Config();
+        config.useSingleServer().setAddress("redis://127.0.0.1:6380").setPassword("123456");
+        return Redisson.create(config);
+    }
+    @Bean
+    public RedissonClient redissonClient3() {
+        Config config = new Config();
+        config.useSingleServer().setAddress("redis://127.0.0.1:6381").setPassword("123456");
+        return Redisson.create(config);
+    }
 }
