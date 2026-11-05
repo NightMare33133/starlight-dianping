@@ -1,20 +1,33 @@
 package com.hmdp;
 
+import cn.hutool.core.bean.BeanUtil;
+import cn.hutool.core.bean.copier.CopyOptions;
+import cn.hutool.core.lang.UUID;
+import com.hmdp.dto.UserDTO;
 import com.hmdp.entity.Shop;
+import com.hmdp.entity.User;
 import com.hmdp.mapper.ShopTypeMapper;
+import com.hmdp.service.IUserService;
 import com.hmdp.service.impl.ShopServiceImpl;
 import com.hmdp.utils.CacheClient;
 import com.hmdp.utils.RedisIdWorker;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.redis.core.StringRedisTemplate;
 
 import javax.annotation.Resource;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.PrintWriter;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
-import static com.hmdp.utils.RedisConstants.CACHE_SHOP_KEY;
+import static com.hmdp.utils.RedisConstants.*;
 import static java.lang.System.currentTimeMillis;
 
 @SpringBootTest
@@ -73,6 +86,38 @@ class HmDianPingApplicationTests {
     void testCacheClient() {
         Shop shop = shopService.getById(1L);
         cacheClient.setWithLogicalExpire(CACHE_SHOP_KEY + 1L,shop, 10L, TimeUnit.SECONDS);
+    }
+
+
+    // ... 注入以下两个 Bean
+    @Resource
+    private IUserService userService;
+    @Resource
+    private StringRedisTemplate stringRedisTemplate;
+    @Test
+    void testCreate1000Tokens() throws Exception {
+        // 1. 查询数据库里的前 1000 个用户
+        List<User> userList = userService.query().last("limit 1000").list();
+        // 2. 准备输出文件（存到你的项目根目录下）
+        File file = new File("/Users/starlight/Projects/tokens.txt");
+        try (PrintWriter writer = new PrintWriter(new FileWriter(file))) {
+            for (User user : userList) {
+                // 2.1 随机生成一个登录 Token (UUID)
+                String token = UUID.randomUUID().toString(true);
+                // 2.2 存入 Redis（复用登录逻辑的 Hash 结构）
+                UserDTO userDTO = BeanUtil.copyProperties(user, UserDTO.class);
+                Map<String, Object> userMap = BeanUtil.beanToMap(userDTO, new HashMap<>(),
+                        CopyOptions.create().setIgnoreNullValue(true)
+                                .setFieldValueEditor((fieldName, fieldValue) -> fieldValue.toString()));
+
+                String tokenKey = LOGIN_USER_KEY + token;
+                stringRedisTemplate.opsForHash().putAll(tokenKey, userMap);
+                stringRedisTemplate.expire(tokenKey, LOGIN_USER_TTL, TimeUnit.MINUTES);
+                // 2.3 把 token 写入文本文件，一行一个
+                writer.println(token);
+            }
+        }
+        System.out.println("🎉 成功为 1000 个用户完成登录，Token 已保存至: " + file.getAbsolutePath());
     }
 
 }
