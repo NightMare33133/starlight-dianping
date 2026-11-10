@@ -10,6 +10,7 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.utils.RedisIdWorker;
 import com.hmdp.utils.SimpleRedisLock;
 import com.hmdp.utils.UserHolder;
+import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.aop.framework.AopContext;
@@ -20,9 +21,14 @@ import org.springframework.lang.NonNull;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import javax.annotation.PostConstruct;
 import javax.annotation.Resource;
 import java.time.LocalDateTime;
 import java.util.Collections;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * <p>
@@ -33,6 +39,7 @@ import java.util.Collections;
  * @since 2026-10-30
  */
 @Service
+@Slf4j
 public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, VoucherOrder> implements IVoucherOrderService {
 
     @Resource
@@ -58,6 +65,75 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 
     }
 
+    //使用数组阻塞队列来存储订单信息，容量为1024*1024
+    private BlockingQueue<VoucherOrder> orderTasks = new ArrayBlockingQueue<>(1024 * 1024);
+
+    //使用线程池来处理订单信息
+    private static final ExecutorService SECKILL_ORDER_EXECUTOR = Executors.newSingleThreadExecutor();
+
+    //@PostConstruct 注解的方法会在当前类的构造方法执行完毕后自动执行，这里用它来启动一个线程，处理阻塞队列中的订单信息。
+    @PostConstruct
+    private void init() {
+        //启动一个线程，处理阻塞队列中的订单信息
+        SECKILL_ORDER_EXECUTOR.submit(new VoucherOrderHandler());
+    }
+
+
+    //线程池有了，接下来就是线程任务
+    // Runnable是一个函数式接口，它只有一个抽象方法 run()，没有参数，也没有返回值。
+    // 这里我们创建了一个内部类 VoucherOrderHandler，它实现了 Runnable 接口
+    private class VoucherOrderHandler implements Runnable {
+        @Override
+        public void run() {
+                while (true) {
+                    try {
+                        //1. 获取队列中的订单信息
+                        VoucherOrder voucherOrder = orderTasks.take();
+                        //2. 创建订单
+                        handleVoucherOrder(voucherOrder);
+
+                    } catch (Exception e) {
+                        log.error("处理订单异常", e);
+                    }
+                }
+            }
+        }
+
+
+    private void handleVoucherOrder(VoucherOrder voucherOrder) {
+        //获取用户id
+        Long userId = voucherOrder.getUserId();
+
+         // 现在要自己创建锁对象
+        //SimpleRedisLock lock = new SimpleRedisLock("order:" + userId, stringRedisTemplate);
+
+        //改用Redisson
+        RLock lock = redissonClient.getLock("lock:order:" + userId);
+
+        // 获取锁
+        // 这里选择无参的tryLock()方法，它会立即返回一个布尔值，表示是否成功获取锁。
+        // 如果获取锁失败，说明当前用户已经在处理订单，直接返回错误信息
+        // 这里不使用lock.lock()，因为lock.lock()会阻塞当前线程
+        boolean isLock = lock.tryLock();
+
+        // 判断是否获取锁成功
+        if (!isLock) {
+            // 获取锁失败，返回错误或重试
+            //现在是异步处理无需返回
+            //return Result.fail("不允许重复下单！");
+            log.error("获取锁失败");
+            return;
+        }
+
+        try{
+            proxy.createVoucherOrder(voucherOrder);
+        }finally {
+            lock.unlock();
+        }
+    }
+
+
+    private IVoucherOrderService proxy;
     //引入lua
     @Override
     public Result seckillVoucher(Long voucherId) {
@@ -79,8 +155,25 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             return Result.fail(r == 1 ? "库存不足！" : "不能重复下单！");
         }
         // 2.2.为0，代表有购买资格，把下单信息保存到阻塞队列中
-        long orderId = redisIdWorker.nextId("order");
-        // TODO 保存阻塞队列
+
+        VoucherOrder voucherOrder = new VoucherOrder();
+        // 2.3 订单id
+        Long orderId = redisIdWorker.nextId("order");
+        voucherOrder.setId(orderId);
+        // 2.4 用户id
+        //Long userId = UserHolder.getUser().getId();
+        voucherOrder.setUserId(userId);
+        // 2.5 代金券id
+        voucherOrder.setVoucherId(voucherId);
+        // 2.6 放入阻塞队列
+        orderTasks.add(voucherOrder);
+
+        // 这里不下单，要放到阻塞队列里面
+        // save(voucherOrder) 这段代码的作用是将创建好的 VoucherOrder 对象保存到数据库中，完成订单的持久化操作。
+//        save(voucherOrder);
+
+        // 3.获取代理对象
+        proxy = (IVoucherOrderService) AopContext.currentProxy();
 
         // 3.返回订单id
         return Result.ok(orderId);
@@ -201,22 +294,30 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 //
 //    }
 
+
     @Transactional
     //@NonNull
-    public  Result createVoucherOrder(Long voucherId) {
+    public void createVoucherOrder(VoucherOrder voucherOrder) {
         // 4.1 一人一单
-        Long userId = UserHolder.getUser().getId();
+
+        //Long userId = UserHolder.getUser().getId();
+        //由于现在是异步处理，所以userId要从voucherOrder中获取
+        Long userId = voucherOrder.getUserId();
+
         // 上锁
         // .intern() 方法的作用是返回字符串对象的规范表示形式。它确保对于相同内容的字符串，返回的是同一个字符串对象的引用。
         // 这样可以避免因为字符串对象不同而导致的锁失效问题。
         // 不加的话数值即使一样，也会因为对象不同而导致锁失效，无法保证线程安全。
         //但是其实在这里加锁会出现锁和事务不在同一个线程的问题，导致事务失效，所以这里加锁是没有意义的。
-            // 4.2 查询订单
-            int count = query().eq("user_id", userId).eq("voucher_id", voucherId).count();
-            // 4.3 判断是否存在
-            if (count > 0) {
+        // 4.2 查询订单
+        int count = query().eq("user_id", userId).eq("voucher_id", voucherOrder.getVoucherId()).count();
+        // 4.3 判断是否存在
+        if (count > 0) {
                 // 用户已经购买过了
-                return Result.fail("用户已经购买过一次！");
+                log.error("用户已经购买过一次！");
+                // 这里不返回错误信息，因为现在是异步处理，所以不能返回错误信息
+                //return Result.fail("用户已经购买过一次！");
+                return ;
             }
 
             // 4.4 扣减库存
@@ -225,35 +326,86 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             // 具体来说，它会将指定 ID 的秒杀优惠券的库存（stock）字段减 1。
             boolean success = seckillVoucherService.update()
                     .setSql("stock = stock - 1")// set stock = stock - 1
-                    .eq("voucher_id", voucherId)
+                    .eq("voucher_id", voucherOrder.getVoucherId())
 //                .eq("stock", voucher.getStock()) // 乐观锁，确保库存未被其他线程修改
                     .gt("stock", 0) // 确保库存大于 0
                     // where id = ? and stock = ? 这部分是为了确保在更新库存时，只有当库存值与当前查询到的库存值相等时才会执行更新操作，从而防止并发问题。
                     .update();
 
             if (!success) {
-                return Result.fail("扣减库存失败！");
+                log.error("库存不足！");
+                return ;
             }
 
 
             // 6. 创建订单
-            VoucherOrder voucherOrder = new VoucherOrder();
-            // 6.1 订单id
-            Long orderId = redisIdWorker.nextId("order");
-            voucherOrder.setId(orderId);
-            // 6.2 用户id
-            //Long userId = UserHolder.getUser().getId();
-            voucherOrder.setUserId(userId);
-            // 6.3 代金券id
-            voucherOrder.setVoucherId(voucherId);
             // 6.4 保存订单
             // save(voucherOrder) 这段代码的作用是将创建好的 VoucherOrder 对象保存到数据库中，完成订单的持久化操作。
             save(voucherOrder);
 
-
             // 7. 返回订单id
-
-            return Result.ok(orderId);
+            //return Result.ok(orderId);
 
     }
 }
+
+
+
+    // 这是老的版本，新的版本是异步执行
+//
+//    @Transactional
+//    //@NonN ull
+//    public  Result createVoucherOrder(Long voucherId) {
+//        // 4.1 一人一单
+//        Long userId = UserHolder.getUser().getId();
+//        // 上锁
+//        // .intern() 方法的作用是返回字符串对象的规范表示形式。它确保对于相同内容的字符串，返回的是同一个字符串对象的引用。
+//        // 这样可以避免因为字符串对象不同而导致的锁失效问题。
+//        // 不加的话数值即使一样，也会因为对象不同而导致锁失效，无法保证线程安全。
+//        //但是其实在这里加锁会出现锁和事务不在同一个线程的问题，导致事务失效，所以这里加锁是没有意义的。
+//            // 4.2 查询订单
+//            int count = query().eq("user_id", userId).eq("voucher_id", voucherId).count();
+//            // 4.3 判断是否存在
+//            if (count > 0) {
+//                // 用户已经购买过了
+//                return Result.fail("用户已经购买过一次！");
+//            }
+//
+//            // 4.4 扣减库存
+//            //setSql("stock = stock - 1").eq("id", voucherId).update()
+//            //这个代码语句的意思是使用 MyBatis-Plus 的更新方法来执行一个 SQL 更新操作。
+//            // 具体来说，它会将指定 ID 的秒杀优惠券的库存（stock）字段减 1。
+//            boolean success = seckillVoucherService.update()
+//                    .setSql("stock = stock - 1")// set stock = stock - 1
+//                    .eq("voucher_id", voucherId)
+////                .eq("stock", voucher.getStock()) // 乐观锁，确保库存未被其他线程修改
+//                    .gt("stock", 0) // 确保库存大于 0
+//                    // where id = ? and stock = ? 这部分是为了确保在更新库存时，只有当库存值与当前查询到的库存值相等时才会执行更新操作，从而防止并发问题。
+//                    .update();
+//
+//            if (!success) {
+//                return Result.fail("库存不足！");
+//            }
+//
+//
+//            // 6. 创建订单
+//            VoucherOrder voucherOrder = new VoucherOrder();
+//            // 6.1 订单id
+//            Long orderId = redisIdWorker.nextId("order");
+//            voucherOrder.setId(orderId);
+//            // 6.2 用户id
+//            //Long userId = UserHolder.getUser().getId();
+//            voucherOrder.setUserId(userId);
+//            // 6.3 代金券id
+//            voucherOrder.setVoucherId(voucherId);
+//            // 6.4 保存订单
+//            // save(voucherOrder) 这段代码的作用是将创建好的 VoucherOrder 对象保存到数据库中，完成订单的持久化操作。
+//            save(voucherOrder);
+//
+//
+//            // 7. 返回订单id
+//            return Result.ok(orderId);
+//
+//    }
+
+
