@@ -32,13 +32,17 @@ public class BlogController {
 
     @PostMapping
     public Result saveBlog(@RequestBody Blog blog) {
-        // 获取登录用户
-        UserDTO user = UserHolder.getUser();
-        blog.setUserId(user.getId());
-        // 保存探店博文
-        blogService.save(blog);
-        // 返回id
-        return Result.ok(blog.getId());
+        //初版
+//        // 获取登录用户
+//        UserDTO user = UserHolder.getUser();
+//        blog.setUserId(user.getId());
+//        // 保存探店博文
+//        blogService.save(blog);
+//        // 返回id
+//        return Result.ok(blog.getId());
+        //新版本
+        return blogService.saveBlog(blog);
+
     }
 
     @PutMapping("/like/{id}")
