@@ -5,6 +5,7 @@ import cn.hutool.core.util.BooleanUtil;
 import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.hmdp.dto.Result;
+import com.hmdp.dto.ScrollResult;
 import com.hmdp.dto.UserDTO;
 import com.hmdp.entity.Blog;
 import com.hmdp.entity.Follow;
@@ -19,15 +20,18 @@ import com.hmdp.utils.UserHolder;
 import org.springframework.beans.BeanUtils;
 import org.springframework.context.annotation.Bean;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
 import static com.hmdp.utils.RedisConstants.BLOG_LIKED_KEY;
+import static com.hmdp.utils.RedisConstants.FEED_KEY;
 
 /**
  * <p>
@@ -198,13 +202,73 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         follows.forEach(follow -> {
             // 4.1 获取粉丝id
             Long userId = follow.getUserId();
-            String key = "feed:" + userId;
+            String key = FEED_KEY + userId;
             // 4.2 将blogId推送到收件箱
             // 对应redis命令： zadd key value score 利用时间戳排序
             stringRedisTemplate.opsForZSet().add(key, blog.getId().toString(), System.currentTimeMillis());
         });
         // 返回id
         return Result.ok(blog.getId());
+    }
+
+    @Override
+    public Result queryBlogOfFollow(Long max, Integer offset) {
+        // 1. 获取当前用户
+        Long userId = UserHolder.getUser().getId();
+        // 2. 查询收件箱 ZREVRANGEBYSCORE key max min limit offset count
+        String key = FEED_KEY + userId;
+        Set<ZSetOperations.TypedTuple<String>> typedTuples = stringRedisTemplate.opsForZSet()
+                .reverseRangeByScoreWithScores(key, 0, max, offset, 2);
+        // 3. 非空判断
+        if (typedTuples == null || typedTuples.isEmpty()) {
+            return Result.ok();
+        }
+        // 4. 解析数据：blogId、minTime(时间戳)、offset
+        // List<Long> ids变量 用于存储从Redis中获取的博客ID列表。
+        // typedTuples是一个包含博客ID和对应时间戳的集合，通过遍历typedTuples，将每个博客ID转换为Long类型并添加到ids列表中。
+        // 最终，ids列表将包含所有从Redis中获取的博客ID，用于后续查询数据库中的博客详细信息。
+        List<Long> ids = new ArrayList<>(typedTuples.size());
+        long minTime = 0;// 先定义的话，最后走完循环后，minTime会被赋值为最后一个元素的时间戳
+        int os = 1; // 记录同一时间戳的数量，初始值为1，因为至少有一个元素
+        for(ZSetOperations.TypedTuple<String> tuple : typedTuples){
+            // 4.1. 获取Id
+            String idStr = tuple.getValue();
+            ids.add(Long.valueOf(idStr));
+            // 4.2. 获取分数(时间戳)
+            long time = tuple.getScore().longValue();
+            // 4.3. 统计数量
+            // 这里的逻辑是为了统计具有相同时间戳的元素数量
+            // 如果当前元素的时间戳与minTime相同，则增加计数器
+            // 如果不同，则更新minTime为当前元素的时间戳，并将计数器重置为1
+            if (time == minTime) {
+                os++;
+            } else {
+                minTime = time;
+                os = 1;
+            }
+
+
+        }
+        // 4. 根据ids查询blog
+        String idStr = StrUtil.join(",", ids);
+        List<Blog> blogs = query()
+                .in("id", ids)
+                .last("ORDER BY FIELD(id," + idStr + ")").list();
+
+        // 5. 查询blog有关的用户和是否被点赞
+        for (Blog blog : blogs) {
+            //5.1 查询blog有关的用户
+            queryBlogUser(blog);
+            //5.2 查询blog是否被当前用户点赞
+            isBlogLiked(blog);
+        }
+        // 6.封装并返回
+        ScrollResult r = new ScrollResult();
+        r.setList(blogs);
+        r.setOffset(os);
+        r.setMinTime(minTime);
+        return Result.ok(r);
+
     }
 
 }
