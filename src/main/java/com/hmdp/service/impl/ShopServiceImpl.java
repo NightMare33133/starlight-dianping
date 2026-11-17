@@ -5,6 +5,7 @@ import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSON;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.hmdp.dto.Result;
 import com.hmdp.entity.Shop;
 import com.hmdp.mapper.ShopMapper;
@@ -12,13 +13,21 @@ import com.hmdp.service.IShopService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.utils.CacheClient;
 import com.hmdp.utils.RedisData;
+import com.hmdp.utils.SystemConstants;
+import lombok.NonNull;
+import org.springframework.data.geo.Distance;
+import org.springframework.data.geo.GeoResult;
+import org.springframework.data.geo.GeoResults;
+import org.springframework.data.redis.connection.RedisGeoCommands;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.domain.geo.GeoReference;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import javax.annotation.Resource;
 import java.beans.Transient;
 import java.time.LocalDateTime;
+import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 
@@ -264,5 +273,68 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         stringRedisTemplate.delete(key);
         // 3. 返回
          return null;
+    }
+
+    @Override
+    public Result queryShopByType(Integer typeId, Integer current, Double x, Double y) {
+
+        // 1. 判断是否需要根据坐标查询
+        if (x == null || y == null) {
+            // 不需要坐标查询，按数据库查询
+            Page<Shop> page = query()
+                    .eq("type_id", typeId)
+                    .page(new Page<>(current, SystemConstants.DEFAULT_PAGE_SIZE));
+            return Result.ok(page.getRecords());
+        }
+        // 2. 计算分页参数
+        int from = (current - 1) * SystemConstants.DEFAULT_PAGE_SIZE;
+        int end = current * SystemConstants.DEFAULT_PAGE_SIZE;
+
+        // 3.查询redis，按照距离排序、分页。结果：shopId、distance
+        String key = SHOP_GEO_KEY + typeId;
+        GeoResults<RedisGeoCommands.GeoLocation<String>> results = stringRedisTemplate.opsForGeo()// GEOSEARCH key FROMLONLAT x y BYRADIUS 5000 WITHDISTANCE
+                .search(
+                        key,
+                        // GeoReference.fromCoordinate(x, y) 是一个静态方法调用，用于创建一个 GeoReference 对象，该对象表示一个地理坐标点。
+                        GeoReference.fromCoordinate(x, y),
+                        // new Distance(5000) 表示一个距离对象，表示搜索的半径为 5000 米。
+                        new Distance(5000),
+                        // RedisGeoCommands.GeoSearchCommandArgs.newGeoSearchArgs().includeDistance().limit(end) 是一个方法链调用，用于创建一个 GeoSearchCommandArgs 对象，
+                        // 该对象包含搜索的参数。includeDistance() 表示在搜索结果中包含距离信息，limit(end) 表示限制返回的结果数量为 end。
+                        RedisGeoCommands.GeoSearchCommandArgs.newGeoSearchArgs().includeDistance().limit(end)
+                );
+        // 4.解析出id
+        if (results == null) {
+            return  Result.ok(Collections.emptyList());
+        }
+        List<GeoResult<RedisGeoCommands.GeoLocation<String>>> list = results.getContent();
+
+        if (list.size() <= from) {
+            // 没有下一页了，结束
+            return Result.ok(Collections.emptyList());
+        }
+
+        // 4.1. 截取 from ~ end 的部分
+        List<Long> ids = new ArrayList<>(list.size());
+        Map<String, Distance> distanceMap = new HashMap<>(list.size());
+        list.stream().skip(from).forEach(result -> {
+            // 4.2. 获取店铺id
+            String shopIdStr = result.getContent().getName();
+            ids.add(Long.valueOf(shopIdStr));
+            // 4.3. 获取距离
+            Distance distance = result.getDistance();
+            distanceMap.put(shopIdStr, distance);
+        });
+
+        // 5，根据id查询数据库
+        String idStr = StrUtil.join(",", ids);
+        List<Shop> shops = query().in("id", ids).last("ORDER BY FIELD(id," + idStr + ")").list();
+        for (Shop shop : shops) {
+            shop.setDistance(distanceMap.get(shop.getId().toString()).getValue());
+        }
+        // 6. 返回
+
+
+        return Result.ok(shops);
     }
 }
