@@ -12,6 +12,7 @@ import com.hmdp.entity.User;
 import com.hmdp.mapper.UserMapper;
 import com.hmdp.service.IUserService;
 import com.hmdp.utils.RegexUtils;
+import com.hmdp.utils.UserHolder;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
@@ -19,6 +20,8 @@ import org.springframework.stereotype.Service;
 import javax.annotation.Resource;
 import javax.servlet.http.HttpSession;
 
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -38,6 +41,23 @@ import static net.sf.jsqlparser.util.validation.metadata.NamedObject.user;
 @Slf4j
 @Service
 public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IUserService {
+    @Override
+    public Result sign() {
+        //1.获取当前登录用户
+        Long userId = UserHolder.getUser().getId();
+        //2.获取当前日期
+        LocalDateTime now = LocalDateTime.now();
+        //3.拼接key
+        String keySuffix = now.format(DateTimeFormatter.ofPattern(":yyyyMM"));
+        String key = USER_SIGN_KEY + userId + keySuffix;
+        //4.获取今天是本月的第几天
+        int day = now.getDayOfMonth();//1-31
+        //5.写入redis SETBIT key offset 1
+        // true表示签到，false表示未签到，offset是从0开始的，所以要减1
+        stringRedisTemplate.opsForValue().setBit(key, day - 1, true);
+
+        return Result.ok();
+    }
 
     @Resource// 这个注解是Spring提供的，作用是自动注入依赖对象。
     // 它可以用在类的成员变量、方法和构造函数上，用于将Spring容器中的Bean自动注入到当前类中，
